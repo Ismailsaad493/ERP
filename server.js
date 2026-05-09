@@ -85,6 +85,4 @@ app.post('/api/save-invoice', (req, res) => {
     });
 });
 
-app.listen(PORT, () => {
-    console.log(`ERP Server running at http://localhost:${PORT}`);
-});
+module.exports = app;
