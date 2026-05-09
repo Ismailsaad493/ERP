@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Krazon OT Solutions - Tax Invoice</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+    <style>
+        :root { --tally-black: #000; }
+        * { box-sizing: border-box; font-family: 'Arial', sans-serif; }
+        body { background: #f4f7f6; margin: 0; padding: 20px; display: flex; flex-direction: column; align-items: center; }
+
+        .toolbar {
+            width: 210mm; background: #fff; padding: 20px; margin-bottom: 20px;
+            border-radius: 8px; display: flex; gap: 15px; flex-wrap: wrap; box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+            position: sticky; top: 10px; z-index: 100; border: 1px solid #ddd; align-items: center;
+        }
+        .btn { padding: 10px 20px; cursor: pointer; border: none; border-radius: 4px; font-weight: bold; transition: 0.3s; }
+        .btn-blue { background: #0052cc; color: white; }
+        .btn-green { background: #1e7e34; color: white; }
+        .file-btn { background: #eee; border: 1px solid #ccc; font-size: 12px; }
+
+        #editor-surface {
+            width: 210mm; min-height: 297mm; background: white; padding: 12mm;
+            border: 1px solid #ccc; box-shadow: 0 0 20px rgba(0,0,0,0.1); position: relative;
+        }
+
+        .tally-container { border: 1.5pt solid var(--tally-black); position: relative; z-index: 2; height: 100%; display: flex; flex-direction: column; }
+        .watermark-overlay {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%) rotate(-30deg);
+            width: 450px; height: 450px; opacity: 0.08; pointer-events: none; z-index: 1;
+            background-repeat: no-repeat; background-position: center; background-size: contain;
+        }
+
+        .row { display: flex; border-bottom: 1pt solid var(--tally-black); }
+        .col { flex: 1; padding: 8px; border-right: 1pt solid var(--tally-black); }
+        .col:last-child { border-right: none; }
+
+        .invoice-type-header { text-align: center; font-size: 18px; font-weight: bold; background: #f0f0f0; border-bottom: 1.5pt solid #000; padding: 4px; }
+        .copy-tag { position: absolute; top: 5px; right: 10px; font-size: 10px; font-weight: bold; text-transform: uppercase; }
+
+        input, textarea { width: 100%; border: none; font-size: 13px; background: transparent; outline: none; font-family: inherit; }
+        textarea { resize: none; }
+        input:focus { background: #fffde7; }
+
+        .table { width: 100%; border-collapse: collapse; flex-grow: 1; }
+        .table th { border-bottom: 1pt solid var(--tally-black); padding: 5px; font-size: 11px; background: #f2f2f2; text-align: center; }
+        .table td { border-right: 1pt solid var(--tally-black); padding: 8px; vertical-align: top; font-size: 13px; }
+        .table tr.item-row { height: 35px; }
+
+        .summary-row { border-top: 1.5pt solid #000; }
+        .bank-box { font-size: 11px; line-height: 1.5; }
+        .page-num { text-align: center; font-size: 10px; margin-top: 10px; color: #777; }
+        #pdf-generator-container { display: none; }
+
+        @media print {
+            .toolbar, .page-num { display: none; }
+            body { padding: 0; background: white; }
+            #editor-surface { border: none; box-shadow: none; margin: 0; }
+        }
+    </style>
+</head>
+<body>
+
+    <div class="toolbar">
+        <button class="btn btn-blue" onclick="addItem()">+ Add Item</button>
+        <select id="tax-select" style="padding:10px; border-radius:4px" onchange="calc()">
+            <option value="intra">Intrastate (CGST 9% + SGST 9%)</option>
+            <option value="inter">Interstate (IGST 18%)</option>
+        </select>
+        
+        <div style="border-left: 1px solid #ccc; padding-left: 15px; display: flex; gap: 10px;">
+            <button class="btn file-btn" onclick="document.getElementById('logo-file').click()">Upload Logo</button>
+            <button class="btn file-btn" onclick="document.getElementById('water-file').click()">Upload Watermark</button>
+            <input type="file" id="logo-file" hidden onchange="loadImage(this, 'main-logo')">
+            <input type="file" id="water-file" hidden onchange="loadImage(this, 'watermark-box', true)">
+        </div>
+
+        <div style="margin-left: auto; display: flex; gap: 10px;">
+            <button class="btn btn-green" onclick="generateThreePagePDF()">Download 3-Page PDF</button>
+        </div>
+    </div>
+
+    <div id="editor-surface">
+        <div class="watermark-overlay" id="watermark-box"></div>
+        
+        <div class="tally-container">
+            <div class="invoice-type-header"><input type="text" value="TAX INVOICE" style="text-align:center; font-weight:bold; font-size:18px;"></div>
+            
+            <div class="row">
+                <div class="col" style="flex: 1.5;">
+                    <img id="main-logo" src="" style="max-height: 55px; margin-bottom: 10px;" alt="Logo Missing">
+                    <div style="font-weight: 800; font-size: 18px; color: #003366;"></div>
+                    <div style="font-size: 11px;">
+                        No 679, 6th Cross Road, 1st Stage,<br>
+                        5th Block, HBR Layout, Bangalore - 560045<br>
+                        <strong>GSTIN: 29ABFFK4253R1ZL</strong>
+                    </div>
+                </div>
+                <div class="col">
+                    <div class="row" style="border:none; padding:0">
+                        <div class="col" style="border:none; padding:0">
+                            <div style="font-size: 10px; font-weight: bold;">Invoice No.</div>
+                            <input type="text" id="inv-no" value="Loading..." style="font-weight:bold" readonly>
+                        </div>
+                        <div class="col" style="border:none; padding:0">
+                            <div style="font-size: 10px; font-weight: bold;">Dated</div>
+                            <input type="date" id="inv-date">
+                        </div>
+                    </div>
+                    <div style="margin-top: 15px;">
+                        <div style="font-size: 10px; font-weight: bold;">Transport Details / Vehicle No.</div>
+                        <input type="text" placeholder="e.g. KA-01-MJ-1234 / Road">
+                    </div>
+                    <div style="margin-top: 10px;">
+                        <div style="font-size: 10px; font-weight: bold;">P.O. Number & Date</div>
+                        <input type="text" placeholder="PO-9988 / 05-May-2026">
+                    </div>
+                </div>
+            </div>
+
+            <div class="row">
+                <div class="col">
+                    <div style="font-size: 10px; font-weight: bold;">Bill To (Buyer)</div>
+                    <textarea id="buyer-details" rows="4" placeholder="Buyer Name, Address and GSTIN"></textarea>
+                </div>
+                <div class="col">
+                    <div style="font-size: 10px; font-weight: bold;">Ship To (Consignee)</div>
+                    <textarea rows="4" placeholder="Shipping Name, Address and GSTIN"></textarea>
+                </div>
+            </div>
+
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th width="40">Sl No</th>
+                        <th>Description of Goods / Services</th>
+                        <th width="60">Qty</th>
+                        <th width="100">Rate</th>
+                        <th width="120">Amount</th>
+                    </tr>
+                </thead>
+                <tbody id="item-body">
+                    </tbody>
+                <tr style="height: 180px;">
+                    <td></td><td></td><td></td><td></td><td></td>
+                </tr>
+            </table>
+
+            <div class="row summary-row">
+                <div class="col" style="flex: 2;">
+                    <div style="font-size: 10px; font-weight: bold;">Amount Chargeable (in words)</div>
+                    <div id="words-display" style="font-weight: bold; margin-top: 5px; font-style: italic;">Zero Rupees Only</div>
+                </div>
+                <div class="col" style="padding: 0; min-width: 250px;">
+                    <div class="row" style="border-bottom:none"><div class="col" style="text-align:right">Subtotal</div><div class="col" id="sub-val" style="text-align:right; font-weight:bold">0.00</div></div>
+                    <div id="tax-rows"></div>
+                    <div class="row" style="background:#eee; border-top: 1pt solid #000;"><div class="col" style="text-align:right; font-weight:bold">Total</div><div class="col" id="total-val" style="text-align:right; font-weight:bold">0.00</div></div>
+                </div>
+            </div>
+
+            <div class="row" style="border-bottom: none;">
+                <div class="col bank-box">
+                    <div style="font-size: 10px; font-weight: bold; text-decoration: underline; margin-bottom: 4px;">Company's Bank Details</div>
+                    <strong>Bank Name:</strong> Kotak Mahindra Bank<br>
+                    <strong>A/c No:</strong> 8055058328<br>
+                    <strong>IFSC:</strong> KKBK0008133<br>
+                    <strong>Branch:</strong> Cambridge Road, Bangalore - 560008
+                </div>
+                <div class="col" style="text-align: right; display: flex; flex-direction: column; justify-content: space-between;">
+                    <div style="font-size: 10px; font-weight: bold;">for KRAZON OT SOLUTIONS</div>
+                    <div style="font-weight: bold; margin-bottom: 5px;">Authorized Signatory</div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="page-num">Editing Master Copy</div>
+
+    <div id="pdf-generator-container"></div>
+
+    <script>
+        // Initialization
+        document.getElementById('inv-date').valueAsDate = new Date();
+        
+        // Fetch the next invoice number from the backend on load
+        fetch('/api/next-invoice-no')
+            .then(res => res.json())
+            .then(data => {
+                document.getElementById('inv-no').value = data.invoice_no;
+            });
+
+        // Calculations
+        function calc() {
+            let sub = 0;
+            document.querySelectorAll('.item-row').forEach(row => {
+                const q = row.querySelector('.q').value || 0;
+                const r = row.querySelector('.r').value || 0;
+                const line = q * r;
+                row.querySelector('.l').innerText = line.toFixed(2);
+                sub += line;
+            });
+
+            const taxType = document.getElementById('tax-select').value;
+            let taxHtml = '';
+            let total = 0;
+
+            if(taxType === 'intra') {
+                const cgst = sub * 0.09;
+                const sgst = sub * 0.09;
+                total = sub + cgst + sgst;
+                taxHtml = `
+                    <div class="row" style="border-bottom:none"><div class="col" style="text-align:right">CGST 9%</div><div class="col" style="text-align:right">${cgst.toFixed(2)}</div></div>
+                    <div class="row" style="border-bottom:none"><div class="col" style="text-align:right">SGST 9%</div><div class="col" style="text-align:right">${sgst.toFixed(2)}</div></div>`;
+            } else {
+                const igst = sub * 0.18;
+                total = sub + igst;
+                taxHtml = `<div class="row" style="border-bottom:none"><div class="col" style="text-align:right">IGST 18%</div><div class="col" style="text-align:right">${igst.toFixed(2)}</div></div>`;
+            }
+
+            document.getElementById('sub-val').innerText = sub.toFixed(2);
+            document.getElementById('tax-rows').innerHTML = taxHtml;
+            document.getElementById('total-val').innerText = Math.round(total).toFixed(2);
+            document.getElementById('words-display').innerText = numberToWords(Math.round(total)) + " Rupees Only";
+        }
+
+        function addItem() {
+            const tr = document.createElement('tr');
+            tr.className = 'item-row';
+            tr.innerHTML = `
+                <td align="center">${document.querySelectorAll('.item-row').length + 1}</td>
+                <td><input type="text" class="desc" placeholder="Description of items/HSN"></td>
+                <td><input type="number" class="q" value="1" oninput="calc()"></td>
+                <td><input type="number" class="r" value="0" oninput="calc()"></td>
+                <td align="right" style="font-weight:bold" class="l">0.00</td>
+            `;
+            document.getElementById('item-body').appendChild(tr);
+            calc();
+        }
+
+        function loadImage(input, targetId, isBg = false) {
+            const file = input.files[0];
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                if(isBg) document.getElementById(targetId).style.backgroundImage = `url(${e.target.result})`;
+                else document.getElementById(targetId).src = e.target.result;
+            };
+            reader.readAsDataURL(file);
+        }
+
+        // 3-Page Generation Logic with Page Breaks
+        function generateThreePagePDF() {
+            const master = document.getElementById('editor-surface');
+            const pdfContainer = document.getElementById('pdf-generator-container');
+            const copies = ["Original for Recipient", "Duplicate for Transporter", "Triplicate for Supplier"];
+            
+            pdfContainer.innerHTML = ''; 
+            pdfContainer.style.display = 'block';
+
+            copies.forEach((label, index) => {
+                const pageClone = master.cloneNode(true);
+                pageClone.removeAttribute('id');
+                pageClone.style.marginBottom = "0";
+
+                // Force a CSS page break after this cloned element
+                if (index < copies.length - 1) {
+                    pageClone.style.pageBreakAfter = 'always';
+                }
+                
+                const tag = document.createElement('div');
+                tag.className = 'copy-tag';
+                tag.innerText = label;
+                pageClone.querySelector('.tally-container').appendChild(tag);
+
+                const pNum = document.createElement('div');
+                pNum.style.textAlign = 'center'; pNum.style.fontSize = '10px'; pNum.style.marginTop = '5px';
+                pNum.innerText = `Page ${index + 1} of 3`;
+                pageClone.appendChild(pNum);
+
+                const inputs = master.querySelectorAll('input, textarea');
+                const clones = pageClone.querySelectorAll('input, textarea');
+                inputs.forEach((inp, i) => { clones[i].value = inp.value; });
+
+                pdfContainer.appendChild(pageClone);
+            });
+
+            const btn = document.querySelector('.btn-green');
+            const originalText = btn.innerText;
+            btn.innerText = "Generating PDF...";
+
+            const opt = {
+                margin: 0,
+                filename: `${document.getElementById('inv-no').value.replace(/\//g, '_')}.pdf`,
+                image: { type: 'jpeg', quality: 0.98 },
+                html2canvas: { scale: 2, useCORS: true },
+                jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+                // Tell the PDF engine to respect the CSS page breaks
+                pagebreak: { mode: ['css', 'legacy'] }
+            };
+
+            html2pdf().from(pdfContainer).set(opt).save().then(() => {
+                pdfContainer.style.display = 'none';
+                btn.innerText = originalText;
+            });
+        }
+
+        function numberToWords(n) {
+            if (n == 0) return 'Zero';
+            const a = ['','One ','Two ','Three ','Four ', 'Five ','Six ','Seven ','Eight ','Nine ','Ten ','Eleven ','Twelve ','Thirteen ','Fourteen ','Fifteen ','Sixteen ','Seventeen ','Eighteen ','Nineteen '];
+            const b = ['', '', 'Twenty','Thirty','Forty','Fifty', 'Sixty','Seventy','Eighty','Ninety'];
+            let str = '';
+            let num = ('000000000' + n).substr(-9).match(/^(\d{2})(\d{2})(\d{2})(\d{1})(\d{2})$/);
+            if (!num) return ''; 
+            str += (num[1] != 0) ? (a[Number(num[1])] || b[num[1][0]] + ' ' + a[num[1][1]]) + 'Crore ' : '';
+            str += (num[2] != 0) ? (a[Number(num[2])] || b[num[2][0]] + ' ' + a[num[2][1]]) + 'Lakh ' : '';
+            str += (num[3] != 0) ? (a[Number(num[3])] || b[num[3][0]] + ' ' + a[num[3][1]]) + 'Thousand ' : '';
+            str += (num[4] != 0) ? (a[Number(num[4])] || b[num[4][0]] + ' ' + a[num[4][1]]) + 'Hundred ' : '';
+            str += (num[5] != 0) ? ((str != '') ? 'and ' : '') + (a[Number(num[5])] || b[num[5][0]] + ' ' + a[num[5][1]]) : '';
+            return str;
+        }
+
+        addItem();
+    </script>
+</body>
+</html>
